@@ -38,6 +38,14 @@ print(np.array(mesh.neighbors))
 
 
 
+def norm(V, M=np.matrix([[1,0],[0,1]])):
+    V = np.array([V])
+    return np.sqrt(np.dot(V,np.dot(M, V.T)))[0,0]
+
+def inner(U, V, M=np.matrix([[1,0],[0,1]])):
+    U, V = np.array([U]), np.array([V])
+    return np.dot(U, np.dot(M, V.T))[0,0]
+
 def find_triangle(x):
     adj_tris = []
     for item in mesh_tris:
@@ -68,19 +76,19 @@ def solve_eikonal(x, u, f):
             umin = temp
     return umin
 
-def solve_local(x, tri, u, f):
+def solve_local(x, tri, u, f, rec=0):
     yz = np.array([item for item in tri if not item == x])
     ab = np.array([mesh_points[yz[0]], mesh_points[yz[1]]]) - np.array(mesh_points[x])
     ## Calculate angle
-    gamma = np.arccos(np.sum(ab[0] * ab[1]) / (np.linalg.norm(ab[0]) * np.linalg.norm(ab[1])))
+    gamma = np.arccos(inner(ab[0], ab[1]) / (norm(ab[0]) * norm(ab[1])))
     if gamma > np.pi / 2:
         for item in mesh_tris:
-            if yz[0] in item and yz[1] in item and x not in item:
+            if yz[0] in item and yz[1] in item and x not in item and rec<10:
                 tri0 = item.copy()
                 tri0[tri0 == yz[0]] = x
                 tri1 = item.copy()
                 tri1[tri1 == yz[1]] = x
-                return np.min([solve_local(x, tri0, u, f), solve_local(x, tri1, u, f)])
+                return np.min([solve_local(x, tri0, u, f, rec+1), solve_local(x, tri1, u, f, rec+1)])
         return solve_acute(ab, yz, u, f)
     else:
         return solve_acute(ab, yz, u, f)
@@ -90,15 +98,15 @@ def solve_acute(ab, yz, u, f):
     if u[yz[1]] == np.Inf and u[yz[1]] == np.Inf:
         Delta = 0
     else:
-        Delta = (u[yz[1]] - u[yz[0]]) / np.linalg.norm(ab[0] - ab[1])
-    alpha = np.arccos(np.sum(ab[0] * (ab[0] - ab[1])) / (np.linalg.norm(ab[0]) * np.linalg.norm(ab[0] - ab[1])))
-    beta = np.arccos(np.sum(ab[1] * (ab[1] - ab[0])) / (np.linalg.norm(ab[1]) * np.linalg.norm(ab[1] - ab[0])))
-    if np.cos(alpha) < Delta:
-        return u[yz[0]] + f * np.linalg.norm(ab[0])
-    elif np.cos(np.pi - beta) > Delta:
-        return u[yz[1]] + f * np.linalg.norm(ab[1])
+        Delta = (u[yz[1]] - u[yz[0]]) / norm(ab[0] - ab[1])
+    alpha = inner(ab[0], ab[0] - ab[1]) / (norm(ab[0]) * norm(ab[0] - ab[1]))
+    beta = inner(ab[1], ab[1] - ab[0]) / (norm(ab[1]) * norm(ab[1] - ab[0]))
+    if alpha < Delta:
+        return u[yz[0]] + f * norm(ab[0])
+    elif - beta > Delta:
+        return u[yz[1]] + f * norm(ab[1])
     else:
-        return u[yz[0]] + np.cos(np.arccos(Delta) - alpha) * f * np.linalg.norm(ab[0])
+        return u[yz[0]] + np.cos(np.arccos(Delta) - np.arccos(alpha)) * f * norm(ab[0])
 
 
 epsilon = 10 ** -4
