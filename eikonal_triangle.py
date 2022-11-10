@@ -174,6 +174,8 @@ class Eikonal_solver:
         self.tri_min.astype(int)
         
     def get_path(self, x, points=[], triangles=[]):
+        if x==self.source:
+            return None
         i = int(self.tri_min[x])
         tri = self.mesh_tris[i]
         print(tri)
