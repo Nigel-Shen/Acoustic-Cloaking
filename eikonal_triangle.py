@@ -4,7 +4,6 @@ import colorcet as cc
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 
-
 import meshpy.triangle as triangle
 import numpy as np
 import numpy.linalg as la
@@ -27,7 +26,7 @@ facets.extend(round_trip_connect(circ_start, len(points) - 1))
 
 def needs_refinement(vertices, area):
     bary = np.sum(np.array(vertices), axis=0) / 3
-    max_area = 0.01 + (la.norm(bary, np.inf) - 1) * 0.05
+    max_area = 0.01 + (la.norm(bary, np.inf) - 1) * 0.02
     return bool(area > max_area)
 
 info = triangle.MeshInfo()
@@ -60,7 +59,7 @@ def inner(U, V, M=np.matrix([[1,0],[0,1]])):
 
 class Eikonal_solver:
 
-    def __init__(self, points, elements):
+    def __init__(self, points, elements, source=0):
         self.mesh_points = points # np.array(mesh.points)
         self.mesh_tris = elements # np.array(mesh.elements)
         self.vm = np.tensordot(np.ones(len(self.mesh_points)), np.eye(2), axes=0)
@@ -69,7 +68,7 @@ class Eikonal_solver:
         self.resolution = len(self.mesh_points)
         self.inlist = np.zeros(self.resolution)
         self.u = np.ones(self.resolution) * np.Inf
-        self.source = 0
+        self.source = source
         self.u[self.source] = 0
         self.Q = []
 
@@ -194,12 +193,34 @@ class Eikonal_solver:
             points=list(set(points))
             triangles=list(set(triangles))
             return points, triangles
-            
+    
+
+    def find_derivatives(self, x, dv=0.05):
+        pts, trs = self.get_path(x)
+        subsolver = Eikonal_solver(self.mesh_points[pts], self.mesh_tris[trs])
+        subsolver.vm = self.vm[pts]
+        dm = np.zeros((len(self.mesh_points), 2,2)).tolist()
+        for i in range(pts):
+            for j in range(2):
+                subsolver.vm[i, j, 0]+=dv
+                subsolver.vm[i, 1-j, 1]+=dv
+                subsolver.find_u()
+                dm[pts, j, 0] = (subsolver.u[i]-self.u[pts])/dv
+                dm[pts, 1-j, 1] = (subsolver.u[i]-self.u[pts])/dv
+                subsolver.vm[i, j, 0]-=dv
+                subsolver.vm[i, 1-j, 1]-=dv
+        return dm
+
+    def find_jacobian(self, xobs):
+        j=[]
+        for x in xobs:
+            j.append(self.find_derivatives(x))
+        return j
+                
 
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u()
-points, triangles = solver.get_path(20)
+points, triangles = solver.get_path(100)
 print(len(points), len(solver.mesh_tris))
-len()
 #plot()
