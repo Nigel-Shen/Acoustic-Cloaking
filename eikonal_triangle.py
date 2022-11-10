@@ -27,7 +27,7 @@ facets.extend(round_trip_connect(circ_start, len(points) - 1))
 
 def needs_refinement(vertices, area):
     bary = np.sum(np.array(vertices), axis=0) / 3
-    max_area = 0.01 + (la.norm(bary, np.inf) - 1) * 0.01
+    max_area = 0.01 + (la.norm(bary, np.inf) - 1) * 0.05
     return bool(area > max_area)
 
 info = triangle.MeshInfo()
@@ -36,128 +36,168 @@ info.set_holes([(0, 0)])
 info.set_facets(facets)
 
 mesh = triangle.build(info, refinement_func=needs_refinement)
+plt.figure(figsize=(11, 9))
 
-mesh_points = np.array(mesh.points)
-mesh_tris = np.array(mesh.elements)
+# def plot():
+#     plt.triplot(*mesh_points.T, triangles=mesh_tris, c='k',
+#                 linewidth=0.5, zorder=1)
+#     mask = np.isfinite(u)
+#     plt.tricontourf(mesh_points[:,0], mesh_points[:,1], u, triangles=mesh_tris, levels=10)
+#     plt.colorbar()
+#     plt.xlabel('$x$')
+#     plt.ylabel('$y$')
+#     plt.gca().set_aspect('equal')
+#     plt.tight_layout()
+#     plt.show()
+def norm(V, M=np.matrix([[1,0],[0,1]])):
+    V = np.array([V])
+    return np.sqrt(np.dot(V,np.dot(M, V.T)))[0,0]
 
-MM = np.matrix([[1,4],[4,1]])
+def inner(U, V, M=np.matrix([[1,0],[0,1]])):
+    U, V = np.array([U]), np.array([V])
+    return np.dot(U, np.dot(M, V.T))[0,0]
+
+
+class Eikonal_solver:
+
+    def __init__(self, points, elements):
+        self.mesh_points = points # np.array(mesh.points)
+        self.mesh_tris = elements # np.array(mesh.elements)
+        self.vm = np.tensordot(np.ones(len(self.mesh_points)), np.eye(2), axes=0)
+        self.tri_min = np.zeros(len(self.mesh_points))
+        self.epsilon = 10 ** -4
+        self.resolution = len(self.mesh_points)
+        self.inlist = np.zeros(self.resolution)
+        self.u = np.ones(self.resolution) * np.Inf
+        self.source = 0
+        self.u[self.source] = 0
+        self.Q = []
+
 # plt.figure()
 # plt.triplot(*mesh_points.T, triangles=mesh_tris)
 # plt.show()
 
-def find_triangle(x):
-    adj_tris = []
-    for item in mesh_tris:
-        if x in item:
-            adj_tris.append(item)
-    return adj_tris
+    def find_triangle(self,x, indexed=False):
+        adj_tris = []
+        for i in range(len(self.mesh_tris)):
+            if x in self.mesh_tris[i]:
+                if indexed:
+                    adj_tris.append(i)
+                else:
+                    adj_tris.append(self.mesh_tris[i])
+        return adj_tris
 
-def find_adjacent(x):
-    adj = [x]
-    for item in find_triangle(x):
-        for ele in item:
-            if not ele in adj:
-                adj.append(ele)
-    adj.pop(0)
-    return adj
+    def find_adjacent(self, x):
+        adj = [x]
+        for item in self.find_triangle(x):
+            for ele in item:
+                if not ele in adj:
+                    adj.append(ele)
+        adj.pop(0)
+        return adj
 
-def norm(V, M=np.matrix([[1,0.4],[0.4,1]])):
-    V = np.array([V])
-    return np.sqrt(np.dot(V,np.dot(M, V.T)))[0,0]
+    def put_in_list(self, index):
+        for item in index:
+            self.inlist[item] = 1
+            self.Q.append(item)
 
-def inner(U, V, M=np.matrix([[1,0.4],[0.4,1]])):
-    U, V = np.array([U]), np.array([V])
-    return np.dot(U, np.dot(M, V.T))[0,0]
+    def solve_eikonal(self, x, u):
+        tris = self.find_triangle(x, True)
+        tri_min = None
+        umin = np.Inf
+        for i in range(len(tris)):
+            tri = self.mesh_tris[tris[i]]
+            temp = self.solve_local(x, tri, u)
+            if temp < umin:
+                umin = temp
+                tri_min = tris[i]
+        return umin, tri_min
 
-def put_in_list(inlist, Q, index):
-    for item in index:
-        inlist[item] = 1
-        Q.append(item)
-
-def solve_eikonal(x, u, f):
-    tris = find_triangle(x)
-    umin = np.Inf
-    for tri in tris:
-        temp = solve_local(x, tri, u, f)
-        if temp < umin:
-            umin = temp
-    return umin
-
-def solve_local(x, tri, u, f, rec=0):
-    yz = np.array([item for item in tri if not item == x])
-    ab = np.array([mesh_points[yz[0]], mesh_points[yz[1]]]) - np.array(mesh_points[x])
-    ## Calculate angle
-    gamma = np.arccos(inner(ab[0], ab[1]) / (norm(ab[0]) * norm(ab[1])))
-    if gamma > np.pi / 2:
-        for item in mesh_tris:
-            if yz[0] in item and yz[1] in item and x not in item and rec<10:
-                tri0 = item.copy()
-                tri0[tri0 == yz[0]] = x
-                tri1 = item.copy()
-                tri1[tri1 == yz[1]] = x
-                return np.min([solve_local(x, tri0, u, f, rec+1), solve_local(x, tri1, u, f, rec+1)])
-        return solve_acute(ab, yz, u, f)
-    else:
-        return solve_acute(ab, yz, u, f)
-
-
-def solve_acute(ab, yz, u, f):
-    if u[yz[1]] == np.Inf and u[yz[1]] == np.Inf:
-        Delta = 0
-    else:
-        Delta = (u[yz[1]] - u[yz[0]]) / norm(ab[0] - ab[1])
-    alpha = inner(ab[0], ab[0] - ab[1]) / (norm(ab[0]) * norm(ab[0] - ab[1]))
-    beta = inner(ab[1], ab[1] - ab[0]) / (norm(ab[1]) * norm(ab[1] - ab[0]))
-    if alpha < Delta:
-        return u[yz[0]] + f * norm(ab[0])
-    elif - beta > Delta:
-        return u[yz[1]] + f * norm(ab[1])
-    else:
-        return u[yz[0]] + np.cos(np.arccos(Delta) - np.arccos(alpha)) * f * norm(ab[0])
+    def solve_local(self, x, tri, u, rec=0):
+        yz = np.array([item for item in tri if not item == x])
+        ab = np.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[x])
+        ## Calculate angle
+        mm=self.vm[x]
+        gamma = np.arccos(inner(ab[0], ab[1], M=mm) / (norm(ab[0], M=mm) * norm(ab[1], M=mm)))
+        if gamma > np.pi / 2:
+            for item in self.mesh_tris:
+                if yz[0] in item and yz[1] in item and x not in item and rec<10:
+                    tri0 = item.copy()
+                    tri0[tri0 == yz[0]] = x
+                    tri1 = item.copy()
+                    tri1[tri1 == yz[1]] = x
+                    return np.min([self.solve_local(x, tri0, u, rec+1), self.solve_local(x, tri1, u, rec+1)])
+            return self.solve_acute(ab, yz, u, mm)
+        else:
+            return self.solve_acute(ab, yz, u, mm)
 
 
-epsilon = 10 ** -4
-resolution = len(mesh_points)
-inlist = np.zeros(resolution)
-speed = 1
-u = np.ones(resolution) * np.Inf
-source = 0
-u[source] = 0
-Q = []
-put_in_list(inlist, Q, find_adjacent(source))
+    def solve_acute(self, ab, yz, u, mm):
+        if u[yz[1]] == np.Inf and u[yz[1]] == np.Inf:
+            Delta = 0
+        else:
+            Delta = (u[yz[1]] - u[yz[0]]) / norm(ab[0] - ab[1], M=mm)
+        alpha = inner(ab[0], ab[0] - ab[1], M=mm) / (norm(ab[0], M=mm) * norm(ab[0] - ab[1], M=mm))
+        beta = inner(ab[1], ab[1] - ab[0], M=mm) / (norm(ab[1], M=mm) * norm(ab[1] - ab[0], M=mm))
+        if alpha < Delta:
+            return u[yz[0]] + norm(ab[0], M=mm)
+        elif - beta > Delta:
+            return u[yz[1]] + norm(ab[1], M=mm)
+        else:
+            return u[yz[0]] + np.cos(np.arccos(Delta) - np.arccos(alpha)) * norm(ab[0], M=mm)
 
-plt.figure(figsize=(11, 9))
 
-def plot():
-    plt.triplot(*mesh_points.T, triangles=mesh_tris, c='k',
-                linewidth=0.5, zorder=1)
-    mask = np.isfinite(u)
-    plt.tricontourf(mesh_points[:,0], mesh_points[:,1], u, triangles=mesh_tris, levels=10)
-    plt.colorbar()
-    plt.xlabel('$x$')
-    plt.ylabel('$y$')
-    plt.gca().set_aspect('equal')
-    plt.tight_layout()
-    plt.show()
+    def find_u(self):
+        self.put_in_list(self.find_adjacent(self.source))
+        i = 0
+        while len(self.Q) > 0:
+            temp = self.Q.pop(0)
+            p = self.u[temp]
+            q, tm = self.solve_eikonal(temp, self.u)
+            self.u[temp] = q
+            self.tri_min[temp] = tm
+            if np.abs(p - q) < self.epsilon:
+                neighbors = self.find_adjacent(temp)
+                for item in neighbors:
+                    if self.inlist[item] == 0:
+                        p = self.u[item]
+                        q, tm = self.solve_eikonal(item, self.u)
+                        if p > q:
+                            self.u[item] = q
+                            self.put_in_list([item])
+                            self.tri_min[item] = tm
+                self.inlist[temp] = 0
+            else:
+                self.put_in_list([temp])
+            print(len(self.Q))
+            i = i + 1
+        self.tri_min.astype(int)
+        
+    def get_path(self, x, points=[], triangles=[]):
+        i = int(self.tri_min[x])
+        tri = self.mesh_tris[i]
+        print(tri)
+        if self.source in tri:
+            points = tri
+            triangles.append(i)
+            return points, triangles
+        else:
+            points.append(x)
+            triangles.append(i)
+            for item in tri:
+                if not item in points:
+                    recpoints, rectriangles = self.get_path(item, points, triangles)
+                    points.extend(recpoints)
+                    triangles.extend(rectriangles)
+            points=list(set(points))
+            triangles=list(set(triangles))
+            return points, triangles
+            
 
-i = 0
-while len(Q) > 0:
-    temp = Q.pop(0)
-    p = u[temp]
-    q = solve_eikonal(temp, u, speed)
-    u[temp] = q
-    if np.abs(p - q) < epsilon:
-        neighbors = find_adjacent(temp)
-        for item in neighbors:
-            if inlist[item] == 0:
-                p = u[item]
-                q = solve_eikonal(item, u, speed)
-                if p > q:
-                    u[item] = q
-                    put_in_list(inlist, Q, [item])
-        inlist[temp] = 0
-    else:
-        put_in_list(inlist, Q, [temp])
-    print(len(Q))
-    i = i + 1
-plot()
+
+solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
+solver.find_u()
+points, triangles = solver.get_path(20)
+print(len(points), len(solver.mesh_tris))
+len()
+#plot()
