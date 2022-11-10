@@ -26,7 +26,7 @@ facets.extend(round_trip_connect(circ_start, len(points) - 1))
 
 def needs_refinement(vertices, area):
     bary = np.sum(np.array(vertices), axis=0) / 3
-    max_area = 0.01 + (la.norm(bary, np.inf) - 1) * 0.02
+    max_area = 0.01 + (la.norm(bary, np.inf) - 1) * 0.05
     return bool(area > max_area)
 
 info = triangle.MeshInfo()
@@ -197,18 +197,18 @@ class Eikonal_solver:
 
     def find_derivatives(self, x, dv=0.05):
         pts, trs = self.get_path(x)
-        subsolver = Eikonal_solver(self.mesh_points[pts], self.mesh_tris[trs])
-        subsolver.vm = self.vm[pts]
+        subsolver = Eikonal_solver(self.mesh_points, self.mesh_tris[trs])
+        subsolver.vm = self.vm
         dm = np.zeros((len(self.mesh_points), 2,2)).tolist()
-        for i in range(pts):
+        for item in pts:
             for j in range(2):
-                subsolver.vm[i, j, 0]+=dv
-                subsolver.vm[i, 1-j, 1]+=dv
+                subsolver.vm[item, j, 0]+=dv
+                subsolver.vm[item, 1-j, 1]+=dv
                 subsolver.find_u()
-                dm[pts, j, 0] = (subsolver.u[i]-self.u[pts])/dv
-                dm[pts, 1-j, 1] = (subsolver.u[i]-self.u[pts])/dv
-                subsolver.vm[i, j, 0]-=dv
-                subsolver.vm[i, 1-j, 1]-=dv
+                dm[item][j][0] = (subsolver.u[item]-self.u[item])/dv
+                dm[item][1-j][1] = (subsolver.u[item]-self.u[item])/dv
+                subsolver.vm[item, j, 0]-=dv
+                subsolver.vm[item, 1-j, 1]-=dv
         return dm
 
     def find_jacobian(self, xobs):
@@ -221,6 +221,7 @@ class Eikonal_solver:
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u()
-points, triangles = solver.get_path(100)
-print(len(points), len(solver.mesh_tris))
+#points, triangles = solver.get_path(100)
+#print(len(points), len(solver.mesh_tris))
+print(solver.find_jacobian([100]))
 #plot()
