@@ -4,6 +4,7 @@ import colorcet as cc
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 
+import autodiff
 import meshpy.triangle as triangle
 import numpy as np
 import numpy.linalg as la
@@ -37,17 +38,6 @@ info.set_facets(facets)
 mesh = triangle.build(info, refinement_func=needs_refinement)
 plt.figure(figsize=(11, 9))
 
-# def plot():
-#     plt.triplot(*mesh_points.T, triangles=mesh_tris, c='k',
-#                 linewidth=0.5, zorder=1)
-#     mask = np.isfinite(u)
-#     plt.tricontourf(mesh_points[:,0], mesh_points[:,1], u, triangles=mesh_tris, levels=10)
-#     plt.colorbar()
-#     plt.xlabel('$x$')
-#     plt.ylabel('$y$')
-#     plt.gca().set_aspect('equal')
-#     plt.tight_layout()
-#     plt.show()
 def norm(V, M=np.matrix([[1,0],[0,1]])):
     V = np.array([V])
     return np.sqrt(np.dot(V,np.dot(M, V.T)))[0,0]
@@ -72,9 +62,17 @@ class Eikonal_solver:
         self.u[self.source] = 0
         self.Q = []
 
-# plt.figure()
-# plt.triplot(*mesh_points.T, triangles=mesh_tris)
-# plt.show()
+    def plot(self):
+        plt.triplot(*self.mesh_points.T, triangles=self.mesh_tris, c='k',
+                    linewidth=0.5, zorder=1)
+        mask = np.isfinite(self.u)
+        plt.tricontourf(self.mesh_points[:,0], self.mesh_points[:,1], self.u, triangles=self.mesh_tris, levels=10)
+        plt.colorbar()
+        plt.xlabel('$x$')
+        plt.ylabel('$y$')
+        plt.gca().set_aspect('equal')
+        plt.tight_layout()
+        plt.show()
 
     def find_triangle(self,x, indexed=False):
         adj_tris = []
@@ -146,7 +144,10 @@ class Eikonal_solver:
             return u[yz[0]] + np.cos(np.arccos(Delta) - np.arccos(alpha)) * norm(ab[0], M=mm)
 
 
-    def find_u(self):
+    def find_u(self, init=True):
+        if init:
+            self.u = np.ones(self.resolution) * np.Inf
+            self.u[self.source] = 0
         self.put_in_list(self.find_adjacent(self.source))
         i = 0
         while len(self.Q) > 0:
@@ -168,7 +169,6 @@ class Eikonal_solver:
                 self.inlist[temp] = 0
             else:
                 self.put_in_list([temp])
-            print(len(self.Q))
             i = i + 1
         self.tri_min.astype(int)
         
@@ -199,17 +199,42 @@ class Eikonal_solver:
         pts, trs = self.get_path(x)
         subsolver = Eikonal_solver(self.mesh_points, self.mesh_tris[trs])
         subsolver.vm = self.vm
-        dm = np.zeros((len(self.mesh_points), 2,2)).tolist()
+        dm = np.zeros((len(self.mesh_points)*3)).tolist()
+        subsolver.find_u()
+        uu = subsolver.u
+        print(len(pts))
         for item in pts:
-            for j in range(2):
-                subsolver.vm[item, j, 0]+=dv
-                subsolver.vm[item, 1-j, 1]+=dv
-                subsolver.find_u()
-                dm[item][j][0] = (subsolver.u[item]-self.u[item])/dv
-                dm[item][1-j][1] = (subsolver.u[item]-self.u[item])/dv
-                subsolver.vm[item, j, 0]-=dv
-                subsolver.vm[item, 1-j, 1]-=dv
+            print(item)
+            for j in range(3):
+                if j < 2:
+                    subsolver.vm[item, j, 1-j]+=dv
+                else:
+                    subsolver.vm[item, 0, 1]+=dv
+                    subsolver.vm[item, 1, 0]+=dv
+                subsolver.find_u() 
+                dm[item*3+j] = (subsolver.u[item]-self.u[item])/dv
+                if j < 2:
+                    subsolver.vm[item, j, 1-j]-=dv
+                else:
+                    subsolver.vm[item, 0, 1]-=dv
+                    subsolver.vm[item, 1, 0]-=dv
+                subsolver.u = uu
+        subsolver.plot_derivative(dm, 1)
         return dm
+
+    def plot_derivative(self, dm, comp=0):
+        id = np.arange(len(self.mesh_points))*3+comp
+        derivative = np.array(dm)[id.astype(int)]
+        plt.triplot(*self.mesh_points.T, triangles=self.mesh_tris, c='k',
+                    linewidth=0.5, zorder=1)
+        mask = np.isfinite(self.u)
+        plt.tricontourf(self.mesh_points[:,0], self.mesh_points[:,1], derivative, triangles=self.mesh_tris, levels=10)
+        plt.colorbar()
+        plt.xlabel('$x$')
+        plt.ylabel('$y$')
+        plt.gca().set_aspect('equal')
+        plt.tight_layout()
+        plt.show()
 
     def find_jacobian(self, xobs):
         j=[]
@@ -221,7 +246,8 @@ class Eikonal_solver:
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u()
+#solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
-print(solver.find_jacobian([100]))
+print(solver.find_jacobian([20]))
 #plot()
