@@ -1,6 +1,7 @@
 import matplotlib
 #matplotlib.use('TkAgg')
-from jax import grad
+import jax.numpy as jnp
+from jax import grad, jit, vmap
 import colorcet as cc
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -37,11 +38,11 @@ info.set_facets(facets)
 mesh = triangle.build(info, refinement_func=needs_refinement)
 plt.figure(figsize=(11, 9))
 
-def norm(V, M=np.matrix([[1,0],[0,1]])):
+def norm(V, M=np.array([[1,0],[0,1]])):
     V = np.array([V])
     return np.sqrt(np.dot(V,np.dot(M, V.T)))[0,0]
 
-def inner(U, V, M=np.matrix([[1,0],[0,1]])):
+def inner(U, V, M=np.array([[1,0],[0,1]])):
     U, V = np.array([U]), np.array([V])
     return np.dot(U, np.dot(M, V.T))[0,0]
 
@@ -112,11 +113,11 @@ class Eikonal_solver:
         return umin, tri_min
 
     def solve_local(self, x, tri, u, vmx, rec=0):
-        yz = np.array([item for item in tri if not item == x])
-        ab = np.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[x])
+        yz = jnp.array([item for item in tri if not item == x])
+        ab = jnp.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[x])
         ## Calculate angle
-        mm=np.matrix([[1,0],[0, 1]])
-        gamma = np.arccos(inner(ab[0], ab[1], M=mm) / (norm(ab[0], M=mm) * norm(ab[1], M=mm)))
+        mm=np.matrix([[vmx[0],vmx[2]],[vmx[2], vmx[1]]])
+        gamma = jnp.arccos(inner(ab[0], ab[1], M=mm) / (norm(ab[0], M=mm) * norm(ab[1], M=mm)))
         if gamma > np.pi / 2:
             for item in self.mesh_tris:
                 if yz[0] in item and yz[1] in item and x not in item and rec<10:
@@ -124,7 +125,7 @@ class Eikonal_solver:
                     tri0[tri0 == yz[0]] = x
                     tri1 = item.copy()
                     tri1[tri1 == yz[1]] = x
-                    return np.min([self.solve_local(x, tri0, u, vmx, rec+1), self.solve_local(x, tri1, u, vmx, rec+1)])
+                    return jnp.min(jnp.array([self.solve_local(x, tri0, u, vmx, rec+1), self.solve_local(x, tri1, u, vmx, rec+1)]))
             return self.solve_acute(ab, yz, u, mm)
         else:
             return self.solve_acute(ab, yz, u, mm)
