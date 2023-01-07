@@ -1,7 +1,7 @@
 import matplotlib
 #matplotlib.use('TkAgg')
-import jax.numpy as jnp
-from jax import grad, jit, vmap
+#import jax.numpy as jnp
+#from jax import grad, jit, vmap
 import colorcet as cc
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -52,13 +52,14 @@ class Eikonal_solver:
     def __init__(self, points, elements, subsolver=None, source=0):
         self.mesh_points = points # np.array(mesh.points)
         self.mesh_tris = elements # np.array(mesh.elements)
-        self.tri_min = np.zeros(len(self.mesh_points))
+        self.tri_min = np.zeros([len(self.mesh_points),3])
         self.epsilon = 10 ** -4
         self.vm = np.ones([len(self.mesh_points), 3])
         self.vm[:, 2] = 0 # Symmetric matrices have three variables
         self.resolution = len(self.mesh_points)
         self.inlist = np.zeros(self.resolution)
         self.u = np.ones(self.resolution) * np.Inf
+        self.solve_order = []
         self.source = source
         self.u[self.source] = 0
         self.subsolver = subsolver
@@ -106,18 +107,18 @@ class Eikonal_solver:
         umin = np.Inf
         for i in range(len(tris)):
             tri = self.mesh_tris[tris[i]]
-            temp = self.solve_local(x, tri, u, vmx)
+            temp, tri = self.solve_local(x, tri, u, vmx)
             if temp < umin:
                 umin = temp
-                tri_min = tris[i]
+                tri_min = tri
         return umin, tri_min
 
     def solve_local(self, x, tri, u, vmx, rec=0):
-        yz = jnp.array([item for item in tri if not item == x])
-        ab = jnp.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[x])
+        yz = np.array([item for item in tri if not item == x])
+        ab = np.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[x])
         ## Calculate angle
         mm=np.matrix([[vmx[0],vmx[2]],[vmx[2], vmx[1]]])
-        gamma = jnp.arccos(inner(ab[0], ab[1], M=mm) / (norm(ab[0], M=mm) * norm(ab[1], M=mm)))
+        gamma = np.arccos(inner(ab[0], ab[1], M=mm) / (norm(ab[0], M=mm) * norm(ab[1], M=mm)))
         if gamma > np.pi / 2:
             for item in self.mesh_tris:
                 if yz[0] in item and yz[1] in item and x not in item and rec<10:
@@ -125,10 +126,15 @@ class Eikonal_solver:
                     tri0[tri0 == yz[0]] = x
                     tri1 = item.copy()
                     tri1[tri1 == yz[1]] = x
-                    return jnp.min(jnp.array([self.solve_local(x, tri0, u, vmx, rec+1), self.solve_local(x, tri1, u, vmx, rec+1)]))
-            return self.solve_acute(ab, yz, u, mm)
+                    value0, tri0 = self.solve_local(x, tri0, u, vmx, rec+1)
+                    value1, tri1 = self.solve_local(x, tri1, u, vmx, rec+1)
+                    if value0 <= value1:
+                        return value0, tri0
+                    else:
+                        return value1, tri1
+            return self.solve_acute(ab, yz, u, mm), tri
         else:
-            return self.solve_acute(ab, yz, u, mm)
+            return self.solve_acute(ab, yz, u, mm), tri
 
 
     def solve_acute(self, ab, yz, u, mm):
@@ -145,17 +151,21 @@ class Eikonal_solver:
         else:
             return u[yz[0]] + np.cos(np.arccos(Delta) - np.arccos(alpha)) * norm(ab[0], M=mm)
 
-    def find_u(self, vm):
+    def initialize(self):
         self.u = np.ones(self.resolution) * np.Inf
         self.u[self.source] = 0
         self.put_in_list(self.find_adjacent(self.source))
+
+    def find_u(self, vm):
+        self.initialize()
         i = 0
         while len(self.Q) > 0:
             temp = self.Q.pop(0)
             p = self.u[temp]
             q, tm = self.solve_eikonal(temp, self.u, vm[temp,:])
             self.u[temp] = q
-            self.tri_min[temp] = tm
+            self.tri_min[temp,:] = tm
+            self.solve_order.append(temp)
             if np.abs(p - q) < self.epsilon:
                 neighbors = self.find_adjacent(temp)
                 for item in neighbors:
@@ -171,8 +181,17 @@ class Eikonal_solver:
                 self.put_in_list([temp])
             i = i + 1
         self.tri_min.astype(int)
-        if self.subsolver is not None:
-            return self.u[self.subsolver]
+    
+    def jax_find_u(self, vm):
+        self.initialize()
+        for pt in self.solve_order:
+            vmpt = vm[pt,:]
+            mm=np.matrix([[vmpt[0],vmpt[2]],[vmpt[2], vmpt[1]]])
+            tri = self.tri_min[pt]
+            yz = np.array([item for item in tri if not item == pt]).astype(int)
+            ab = np.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[pt])
+            self.u[pt] = self.solve_acute(ab, yz, self.u, mm)
+        return self.u[self.subsolver]
 
     def fim_solver(self):
         self.find_u(self.vm)
@@ -180,16 +199,15 @@ class Eikonal_solver:
     def get_path(self, x, points=[], triangles=[]):
         if x==self.source:
             return None
-        i = int(self.tri_min[x])
-        tri = self.mesh_tris[i]
+        tri = int(self.tri_min[x])
         print(tri)
         if self.source in tri:
             points = tri
-            triangles.append(i)
+            triangles.append(tri)
             return points, triangles
         else:
             points.append(x)
-            triangles.append(i)
+            triangles.append(tri)
             for item in tri:
                 if not item in points:
                     recpoints, rectriangles = self.get_path(item, points, triangles)
@@ -200,13 +218,13 @@ class Eikonal_solver:
             return points, triangles
     
     # Incorrect result in autodiff, giving all zeros----------------------------
-    def find_derivatives(self, x):
-        pts, trs = self.get_path(x) # Find domain of dependence
-        subsolver = Eikonal_solver(self.mesh_points, self.mesh_tris[trs], subsolver=x) # Create a solver on the domain of dependence
-        subsolver.vm = self.vm 
-        dm = grad(subsolver.find_u)(subsolver.vm) # Take the gradient by autodiff
-        #subsolver.plot_derivative(dm, 1)
-        return dm
+    # def find_derivatives(self, x):
+    #     pts, trs = self.get_path(x) # Find domain of dependence
+    #     subsolver = Eikonal_solver(self.mesh_points[pts], trs, subsolver=x) # Create a solver on the domain of dependence
+    #     subsolver.vm = self.vm[pts]
+    #     dm = grad(subsolver.jax_find_u)(subsolver.vm) # Take the gradient by autodiff
+    #     #subsolver.plot_derivative(dm, 1)
+    #     return dm
     ## Ends Here-----------------------------------
 
     def plot_derivative(self, dm, comp=0):
@@ -234,6 +252,8 @@ class Eikonal_solver:
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u(solver.vm)
 #solver.plot()
+solver.jax_find_u(solver.vm)
+solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
 print(np.max(solver.find_jacobian([20])))
