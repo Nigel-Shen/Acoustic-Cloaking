@@ -165,8 +165,10 @@ class Eikonal_solver:
             q, tm = self.solve_eikonal(temp, self.u, vm[temp,:])
             self.u[temp] = q
             self.tri_min[temp,:] = tm
-            self.solve_order.append(temp)
+            if tm not in self.mesh_tris:
+                self.mesh_tris = np.append(self.mesh_tris, [tm], axis=0) # Append man-made cute triangles
             if np.abs(p - q) < self.epsilon:
+                self.solve_order.append(temp) 
                 neighbors = self.find_adjacent(temp)
                 for item in neighbors:
                     if self.inlist[item] == 0:
@@ -174,10 +176,14 @@ class Eikonal_solver:
                         q, tm = self.solve_eikonal(item, self.u, vm[item,:])
                         if p > q:
                             self.u[item] = q
+                            if item in self.solve_order:
+                                self.solve_order.remove(item)
                             self.put_in_list([item])
                             self.tri_min[item] = tm
                 self.inlist[temp] = 0
             else:
+                if temp in self.solve_order:
+                    self.solve_order.remove(temp)
                 self.put_in_list([temp])
             i = i + 1
         self.tri_min.astype(int)
@@ -251,8 +257,8 @@ class Eikonal_solver:
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u(solver.vm)
-#solver.plot()
 solver.jax_find_u(solver.vm)
+print(solver.u)
 solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
