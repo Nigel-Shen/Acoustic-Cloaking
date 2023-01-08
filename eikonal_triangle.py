@@ -1,15 +1,13 @@
 import matplotlib
 #matplotlib.use('TkAgg')
-#import jax.numpy as jnp
-#from jax import grad, jit, vmap
+import jax.numpy as jnp
+from jax import grad, jit, vmap
 import colorcet as cc
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import meshpy.triangle as triangle
 import numpy as np
 import numpy.linalg as la
-
-
 def round_trip_connect(start, end):
     return [(i, i + 1) for i in range(start, end)] + [(end, start)]
 
@@ -46,10 +44,18 @@ def inner(U, V, M=np.array([[1,0],[0,1]])):
     U, V = np.array([U]), np.array([V])
     return np.dot(U, np.dot(M, V.T))[0,0]
 
+def jax_norm(V, M=jnp.array([[1,0],[0,1]])):
+    V = jnp.array([V])
+    return jnp.sqrt(jnp.dot(V,jnp.dot(M, V.T)))[0,0]
+
+def jax_inner(U, V, M=jnp.array([[1,0],[0,1]])):
+    U, V = jnp.array([U]), jnp.array([V])
+    return jnp.dot(U, jnp.dot(M, V.T))[0,0]
+
 #vm = np.tensordot(np.ones(len(self.mesh_points)), np.eye(2), axes=0)
 class Eikonal_solver:
 
-    def __init__(self, points, elements, subsolver=None, source=0):
+    def __init__(self, points, elements, subsolver=None, source=10):
         self.mesh_points = points # np.array(mesh.points)
         self.mesh_tris = elements # np.array(mesh.elements)
         self.tri_min = np.zeros([len(self.mesh_points),3])
@@ -151,6 +157,20 @@ class Eikonal_solver:
         else:
             return u[yz[0]] + np.cos(np.arccos(Delta) - np.arccos(alpha)) * norm(ab[0], M=mm)
 
+    def jax_solve_acute(self, ab, yz, u, mm):
+        if u.take(yz[1]) == np.Inf and u.take(yz[1]) == np.Inf:
+            Delta = 0
+        else:
+            Delta = (u.take(yz[1]) - u.take(yz[0])) / jax_norm(ab[0] - ab[1], M=mm)
+        alpha = jax_inner(ab[0], ab[0] - ab[1], M=mm) / (jax_norm(ab[0], M=mm) * jax_norm(ab[0] - ab[1], M=mm))
+        beta = jax_inner(ab[1], ab[1] - ab[0], M=mm) / (jax_norm(ab[1], M=mm) * jax_norm(ab[1] - ab[0], M=mm))
+        if alpha < Delta:
+            return u.take(yz[0]) + jax_norm(ab[0], M=mm)
+        elif - beta > Delta:
+            return u.take(yz[1]) + jax_norm(ab[1], M=mm)
+        else:
+            return u.take(yz[0]) + jnp.cos(jnp.arccos(Delta) - jnp.arccos(alpha)) * jax_norm(ab[0], M=mm)
+
     def initialize(self):
         self.u = np.ones(self.resolution) * np.Inf
         self.u[self.source] = 0
@@ -166,9 +186,9 @@ class Eikonal_solver:
             self.u[temp] = q
             self.tri_min[temp,:] = tm
             if tm not in self.mesh_tris:
-                self.mesh_tris = np.append(self.mesh_tris, [tm], axis=0) # Append man-made cute triangles
+                self.mesh_tris = np.append(self.mesh_tris, [tm], axis=0)
             if np.abs(p - q) < self.epsilon:
-                self.solve_order.append(temp) 
+                self.solve_order.append(temp)
                 neighbors = self.find_adjacent(temp)
                 for item in neighbors:
                     if self.inlist[item] == 0:
@@ -190,13 +210,16 @@ class Eikonal_solver:
     
     def jax_find_u(self, vm):
         self.initialize()
+        self.u = jnp.array(self.u)
         for pt in self.solve_order:
             vmpt = vm[pt,:]
-            mm=np.matrix([[vmpt[0],vmpt[2]],[vmpt[2], vmpt[1]]])
+            mm=jnp.array([[vmpt[0],vmpt[2]],[vmpt[2], vmpt[1]]])
             tri = self.tri_min[pt]
-            yz = np.array([item for item in tri if not item == pt]).astype(int)
-            ab = np.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - np.array(self.mesh_points[pt])
-            self.u[pt] = self.solve_acute(ab, yz, self.u, mm)
+            yz = jnp.array([item for item in tri if not item == pt]).astype(int)
+            ab = jnp.array([self.mesh_points[yz[0]], self.mesh_points[yz[1]]]) - jnp.array(self.mesh_points[pt])
+            val=self.jax_solve_acute(ab, yz, self.u, mm)
+            self.u = self.u.at[pt].set(val)
+        self.u=jnp.asarray(self.u)
         return self.u[self.subsolver]
 
     def fim_solver(self):
@@ -205,7 +228,7 @@ class Eikonal_solver:
     def get_path(self, x, points=[], triangles=[]):
         if x==self.source:
             return None
-        tri = int(self.tri_min[x])
+        tri = self.tri_min[x].astype(int)
         print(tri)
         if self.source in tri:
             points = tri
@@ -220,17 +243,18 @@ class Eikonal_solver:
                     points.extend(recpoints)
                     triangles.extend(rectriangles)
             points=list(set(points))
-            triangles=list(set(triangles))
+            triangles=np.unique(triangles, axis=0)
             return points, triangles
     
     # Incorrect result in autodiff, giving all zeros----------------------------
-    # def find_derivatives(self, x):
-    #     pts, trs = self.get_path(x) # Find domain of dependence
-    #     subsolver = Eikonal_solver(self.mesh_points[pts], trs, subsolver=x) # Create a solver on the domain of dependence
-    #     subsolver.vm = self.vm[pts]
-    #     dm = grad(subsolver.jax_find_u)(subsolver.vm) # Take the gradient by autodiff
-    #     #subsolver.plot_derivative(dm, 1)
-    #     return dm
+    def find_derivatives(self, x):
+        pts, trs = self.get_path(x) # Find domain of dependence
+        subsolver = Eikonal_solver(self.mesh_points, trs, subsolver=x) # Create a solver on the domain of dependence
+        subsolver.vm = self.vm
+        subsolver.fim_solver()
+        dm = grad(subsolver.jax_find_u)(subsolver.vm) # Take the gradient by autodiff
+        #subsolver.plot_derivative(dm, 1)
+        return dm
     ## Ends Here-----------------------------------
 
     def plot_derivative(self, dm, comp=0):
@@ -252,15 +276,12 @@ class Eikonal_solver:
         for x in xobs:
             j.append(self.find_derivatives(x))
         return j
-                
-
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u(solver.vm)
 solver.jax_find_u(solver.vm)
-print(solver.u)
 solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
-print(np.max(solver.find_jacobian([20])))
+print(solver.find_jacobian([20]))
 #plot()
