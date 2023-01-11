@@ -1,4 +1,5 @@
 import matplotlib
+import time
 #matplotlib.use('TkAgg')
 import jax.numpy as jnp
 from jax import grad, jit, vmap
@@ -229,7 +230,6 @@ class Eikonal_solver:
         if x==self.source:
             return None
         tri = self.tri_min[x].astype(int)
-        print(tri)
         if self.source in tri:
             points = tri
             triangles.append(tri)
@@ -246,42 +246,55 @@ class Eikonal_solver:
             triangles=np.unique(triangles, axis=0)
             return points, triangles
     
-    # Incorrect result in autodiff, giving all zeros----------------------------
     def find_derivatives(self, x):
         pts, trs = self.get_path(x) # Find domain of dependence
         subsolver = Eikonal_solver(self.mesh_points, trs, subsolver=x) # Create a solver on the domain of dependence
         subsolver.vm = self.vm
-        subsolver.fim_solver()
+        subsolver.tri_min=self.tri_min
+        xy, x_ind, y_ind = np.intersect1d(self.solve_order, pts, return_indices=True)
+        subsolver.solve_order = np.array(self.solve_order)[np.sort(x_ind)]
         dm = grad(subsolver.jax_find_u)(subsolver.vm) # Take the gradient by autodiff
-        #subsolver.plot_derivative(dm, 1)
-        return dm
-    ## Ends Here-----------------------------------
+        return dm.tolist()
 
     def plot_derivative(self, dm, comp=0):
-        id = np.arange(len(self.mesh_points))*3+comp
-        derivative = np.array(dm)[id.astype(int)]
-        plt.triplot(*self.mesh_points.T, triangles=self.mesh_tris, c='k',
-                    linewidth=0.5, zorder=1)
-        mask = np.isfinite(self.u)
-        plt.tricontourf(self.mesh_points[:,0], self.mesh_points[:,1], derivative, triangles=self.mesh_tris, levels=10)
+        i, j = 335, 2
+        Df = dm[comp]
+
+        V = np.array(mesh.points)
+        F = np.array(mesh.elements)
+
+        vmax = abs(Df).max()
+        vmin = -vmax
+        levels = np.linspace(vmin, vmax, 11)
+
+        I_nnz = np.where((Df != 0).any(1))
+
+        plt.figure()
+        plt.tricontourf(*V.T, F, Df[:, 2], levels=levels, zorder=1, cmap=cc.cm.bwy)
         plt.colorbar()
-        plt.xlabel('$x$')
-        plt.ylabel('$y$')
-        plt.gca().set_aspect('equal')
+        plt.triplot(*V.T, F, c='k', linewidth=0.5, zorder=2)
+        plt.scatter(*V[i], s=50, facecolors='orange', edgecolors='black', zorder=3)
+        plt.scatter(*V[solver.source], s=50, facecolors='cyan', edgecolors='black', zorder=3)
+        plt.scatter(*V[I_nnz].T, s=25, alpha=0.25, facecolors='black', edgecolors='black', zorder=3)
         plt.tight_layout()
         plt.show()
 
-    def find_jacobian(self, xobs):
+    def find_jacobian(self, xobs=np.arange(5, 35, dtype=int)):
         j=[]
         for x in xobs:
-            j.append(self.find_derivatives(x))
+            if x == self.source:
+                j.append(np.zeros([335, 3]).tolist())
+            else:
+                j.append(self.find_derivatives(x))
+            print(x)
         return j
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u(solver.vm)
-solver.jax_find_u(solver.vm)
 solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
-print(solver.find_jacobian([20]))
+t = time.time()
+print(solver.find_jacobian())
+print("Finding Jacobian costs", time.time()-t)
 #plot()
