@@ -71,8 +71,10 @@ class Eikonal_solver:
         self.u[self.source] = 0
         self.subsolver = subsolver
         self.Q = []
+        self.xobs = np.arange(5, 35, dtype=int)
 
     def plot(self):
+        plt.figure(figsize=(11, 9))
         plt.triplot(*self.mesh_points.T, triangles=self.mesh_tris, c='k',
                     linewidth=0.5, zorder=1)
         mask = np.isfinite(self.u)
@@ -254,7 +256,8 @@ class Eikonal_solver:
         xy, x_ind, y_ind = np.intersect1d(self.solve_order, pts, return_indices=True)
         subsolver.solve_order = np.array(self.solve_order)[np.sort(x_ind)]
         dm = grad(subsolver.jax_find_u)(subsolver.vm) # Take the gradient by autodiff
-        return dm.tolist()
+        #print(dm)
+        return dm.flatten().tolist()
 
     def plot_derivative(self, dm, comp=0):
         i, j = 335, 2
@@ -279,15 +282,32 @@ class Eikonal_solver:
         plt.tight_layout()
         plt.show()
 
-    def find_jacobian(self, xobs=np.arange(5, 35, dtype=int)):
+    def find_jacobian(self):
         j=[]
-        for x in xobs:
+        for x in self.xobs:
             if x == self.source:
-                j.append(np.zeros([335, 3]).tolist())
+                j.append(np.zeros([460 * 3]).tolist())
             else:
                 j.append(self.find_derivatives(x))
-            print(x)
-        return j
+        self.subsolver = None
+        return np.array(j)
+
+    def find_velocity(self, max_iter=10):
+        ## Using Gauss-Newton Method to find the optimal velocity matrices
+        count = 0
+        tau = np.sqrt(np.sum((self.mesh_points[self.xobs]-self.mesh_points[self.source])**2, axis=1))
+        while count < max_iter:
+            print("iteration #: ", count)
+            self.solve_order = []
+            self.fim_solver()
+            res = np.array([tau - self.u[self.xobs]]).T
+            print(np.sum(res**2))
+            if np.max(np.abs(res)) < 10**-2:
+                break
+            J = self.find_jacobian()
+            self.vm = self.vm + np.dot(np.linalg.pinv(J), res).reshape((460, 3))
+            count = count + 1
+
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
 solver.find_u(solver.vm)
@@ -295,6 +315,7 @@ solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
 t = time.time()
-print(solver.find_jacobian())
-print("Finding Jacobian costs", time.time()-t)
+solver.find_velocity()
+print("Finding velocity costs", time.time()-t)
+solver.plot()
 #plot()
