@@ -6,6 +6,7 @@ from jax import grad, jit, vmap
 import colorcet as cc
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 import meshpy.triangle as triangle
 import numpy as np
 import numpy.linalg as la
@@ -78,6 +79,7 @@ class Eikonal_solver:
         plt.triplot(*self.mesh_points.T, triangles=self.mesh_tris, c='k',
                     linewidth=0.5, zorder=1)
         mask = np.isfinite(self.u)
+        plt.scatter(*self.mesh_points[self.source], s=50, facecolors='cyan', edgecolors='black', zorder=3)
         plt.tricontourf(self.mesh_points[:,0], self.mesh_points[:,1], self.u, triangles=self.mesh_tris, levels=10)
         plt.colorbar()
         plt.xlabel('$x$')
@@ -259,28 +261,46 @@ class Eikonal_solver:
         #print(dm)
         return dm.flatten().tolist()
 
-    def plot_derivative(self, dm, comp=0):
-        i, j = 335, 2
-        Df = dm[comp]
+    def plot_derivative(self, i, comp=0):
+        plt.figure(figsize=(11, 9))
+        Df = np.array(self.find_derivatives(i)).reshape((460, 3))
 
-        V = np.array(mesh.points)
-        F = np.array(mesh.elements)
-
-        vmax = abs(Df).max()
-        vmin = -vmax
+        vmax = np.abs(Df).max()
+        vmin = - vmax
         levels = np.linspace(vmin, vmax, 11)
 
         I_nnz = np.where((Df != 0).any(1))
 
-        plt.figure()
-        plt.tricontourf(*V.T, F, Df[:, 2], levels=levels, zorder=1, cmap=cc.cm.bwy)
+        ax = plt.gca()
+        ax.set_aspect('equal')
+
+        plt.tricontourf(*self.mesh_points.T, self.mesh_tris, Df[:, comp], levels=levels, zorder=1, cmap='PiYG')
         plt.colorbar()
-        plt.triplot(*V.T, F, c='k', linewidth=0.5, zorder=2)
-        plt.scatter(*V[i], s=50, facecolors='orange', edgecolors='black', zorder=3)
-        plt.scatter(*V[solver.source], s=50, facecolors='cyan', edgecolors='black', zorder=3)
-        plt.scatter(*V[I_nnz].T, s=25, alpha=0.25, facecolors='black', edgecolors='black', zorder=3)
+        plt.triplot(*self.mesh_points.T, self.mesh_tris, c='black', linewidth=0.5, zorder=2)
+        plt.scatter(*self.mesh_points[i], s=50, facecolors='orange', edgecolors='black', zorder=3)
+        plt.scatter(*self.mesh_points[self.source], s=50, facecolors='green', edgecolors='black', zorder=3)
+        plt.scatter(*self.mesh_points[I_nnz].T, s=50, alpha=0.5, facecolors='black', edgecolors='white', zorder=3)
         plt.tight_layout()
         plt.show()
+
+    def plot_velocity(self):
+        plt.figure(figsize=(9, 9))
+        ax = plt.gca()
+        vmax = np.abs(self.vm).max()
+        vmin = - vmax
+        levels = np.linspace(vmin, vmax, 11)
+        for i in range(460):
+            M = np.array([[self.vm[i, 0],self.vm[i, 2]],[self.vm[i, 2], self.vm[i, 1]]])
+            e, v = np.linalg.eig(M)
+            angle = np.angle(v[0, 0] + v[0, 1]*1j, deg=True)
+            ellipse = Ellipse(xy=self.mesh_points[i], width=e[0]/10, height=e[1]/10, facecolor='green', alpha=np.min(e)/np.max(e), angle=angle)
+            ax.add_patch(ellipse)
+        #plt.colorbar()
+        ax.set_aspect('equal')
+        plt.triplot(*self.mesh_points.T, self.mesh_tris, c='black', linewidth=0.5, zorder=2)
+        plt.tight_layout()
+        plt.show()
+
 
     def find_jacobian(self):
         j=[]
@@ -316,6 +336,7 @@ solver.plot()
 #print(len(points), len(solver.mesh_tris))
 t = time.time()
 solver.find_velocity()
-print("Finding velocity costs", time.time()-t)
-solver.plot()
+solver.plot_velocity()
+#solver.plot_derivative(20)
+print("Finding jacobian costs", time.time()-t)
 #plot()
