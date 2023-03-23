@@ -54,17 +54,18 @@ def jax_inner(U, V, M=jnp.array([[1,0],[0,1]])):
     U, V = jnp.array([U]), jnp.array([V])
     return jnp.dot(U, jnp.dot(M, V.T))[0,0]
 
-def find_plane_wave_bc(dir, grid_points, boundary=np.arange(5, 35).tolist(), normalize=True):
+def find_plane_wave_bc(dir, grid_points, boundary=np.arange(5, 35).tolist(), normalize=True, init=True):
     if normalize:
         dir = dir / np.linalg.norm(dir)
     bc = []
     for point in boundary:
         new_bc = np.inner(grid_points[point], dir)
-        if new_bc > 0:
+        if new_bc > 0 and init==True:
             new_bc = np.arccos(new_bc/3)*6*np.pi
         bc.append(np.inner(grid_points[point], dir))
     bc = bc - np.min(bc)
     return bc.tolist()
+
 
 #vm = np.tensordot(np.ones(len(self.mesh_points)), np.eye(2), axes=0)
 class Eikonal_solver:
@@ -84,7 +85,7 @@ class Eikonal_solver:
         self.u[self.source] = self.init_value
         self.subsolver = None
         self.Q = []
-        self.xobs = np.arange(5, 36, dtype=int)
+        self.xobs = np.arange(5, 35, dtype=int)
         self.__dict__.update(kwargs)
 
     def set_condition(self, value, source=np.arange(5, 35).tolist()):
@@ -358,8 +359,9 @@ class Eikonal_solver:
     def uni_direction_design(self, dir, boundary=np.arange(5, 35).tolist(), max_iter=10):
         ## Using Gauss-Newton Method to find the optimal velocity matrices
         count = 0
-        tau = find_plane_wave_bc(dir, self.mesh_points)
-        self.set_condition(boundary, tau)
+        tau = find_plane_wave_bc(dir, self.mesh_points, init=False)
+        inits = find_plane_wave_bc(dir, self.mesh_points, boundary, init=True)
+        self.set_condition(inits, boundary)
         while count < max_iter:
             print("iteration #: ", count)
             self.solve_order = []
@@ -376,15 +378,18 @@ class Eikonal_solver:
         ## Using Gauss-Newton Method to find the optimal velocity matrices
         count = 0
         tau = []
+        inits = []
         for dir in dirs:
-            tau.append(find_plane_wave_bc(dir, self.mesh_points, boundary))
+            tau.append(find_plane_wave_bc(dir, self.mesh_points, boundary, init=False))
+            inits.append(find_plane_wave_bc(dir, self.mesh_points, boundary, init=True))
         while count < max_iter:
             res = []
             J = []
             for i in range(len(dirs)):
-                self.set_condition(boundary, tau[i])
+                self.set_condition(inits[i],boundary)
                 print("iteration #: ", count)
                 self.solve_order = []
+                self.tri_min = np.ones([len(self.mesh_points),3]) * np.Inf
                 self.fim_solver()
                 res.append(np.array([tau[i] - self.u[self.xobs]]).T)
                 J.append(self.find_jacobian())
@@ -399,13 +404,9 @@ class Eikonal_solver:
 
 
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
-dir = [1,1]
-bc = find_plane_wave_bc(dir, np.array(mesh.points))
-solver.set_condition(bc)
-solver.find_u(solver.vm)
-solver.plot(saveas='plane_wave')
-print(solver.tri_min)
-solver.jax_find_u(solver.vm)
+dirs = [[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1],[1,0],[1,1]]
+solver.multi_direction_design(dirs)
+solver.plot(saveas='multi_directions')
 solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
