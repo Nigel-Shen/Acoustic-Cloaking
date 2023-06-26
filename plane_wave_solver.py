@@ -1,3 +1,4 @@
+from inspect import EndOfBlock
 import matplotlib
 import time
 #matplotlib.use('TkAgg')
@@ -54,23 +55,21 @@ def jax_inner(U, V, M=jnp.array([[1,0],[0,1]])):
     U, V = jnp.array([U]), jnp.array([V])
     return jnp.dot(U, jnp.dot(M, V.T))[0,0]
 
-def find_plane_wave_bc(dir, grid_points, boundary=np.arange(5, 35).tolist(), normalize=True, init=True):
+def find_plane_wave_bc(dir, grid_points, boundary=np.arange(5, 35).tolist(), normalize=True):
     if normalize:
         dir = dir / np.linalg.norm(dir)
     bc = []
     for point in boundary:
-        new_bc = np.inner(grid_points[point], dir)
-        if new_bc > 0 and init==True:
-            new_bc = np.arccos(new_bc/3)*6*np.pi
         bc.append(np.inner(grid_points[point], dir))
     bc = bc - np.min(bc)
-    return bc.tolist()
+    return bc
 
 
 #vm = np.tensordot(np.ones(len(self.mesh_points)), np.eye(2), axes=0)
 class Eikonal_solver:
     def __init__(self, points, elements, **kwargs):
         self.mesh_points = points # np.array(mesh.points)
+        self.N = points.shape[0]
         self.mesh_tris = elements # np.array(mesh.elements)
         self.tri_min = np.ones([len(self.mesh_points),3]) * np.Inf
         self.epsilon = 10 ** -4
@@ -80,17 +79,29 @@ class Eikonal_solver:
         self.inlist = np.zeros(self.resolution)
         self.u = np.ones(self.resolution) * np.Inf
         self.solve_order = []
-        self.source = np.arange(5, 35).tolist()
-        self.init_value = 3 - self.mesh_points[self.source, 0]
-        self.u[self.source] = self.init_value
+        self.source = None#np.arange(5, 35).tolist()
+        self.init_value = None #3 - self.mesh_points[self.source, 0]
         self.subsolver = None
         self.Q = []
         self.xobs = np.arange(5, 35, dtype=int)
         self.__dict__.update(kwargs)
+        self.make_compatible()
 
-    def set_condition(self, value, source=np.arange(5, 35).tolist()):
-        self.source = source[:]
+    def make_compatible(self):
+        if not self.source == None:
+            new_source=[]
+            new_init_value=[]
+            for i in range(len(self.source)):
+                if self.init_value[i]<3:
+                    new_source.append(self.source[i])
+                    new_init_value.append(self.init_value[i])
+            self.source = new_source
+            self.init_value = new_init_value
+
+    def set_condition(self, source, value):
+        self.source = source
         self.init_value = value
+        self.make_compatible()
 
     def plot(self, saveas=False):
         plt.figure(figsize=(11, 9))
@@ -100,8 +111,8 @@ class Eikonal_solver:
         #plt.scatter(*self.mesh_points[self.source], s=50, facecolors='cyan', edgecolors='black', zorder=3)
         plt.tricontourf(self.mesh_points[:,0], self.mesh_points[:,1], self.u, triangles=self.mesh_tris, levels=10)
         plt.colorbar()
-        plt.xlabel('$x$')
-        plt.ylabel('$y$')
+        plt.xlabel('')
+        plt.ylabel('')
         plt.gca().set_aspect('equal')
         plt.tight_layout()
         if saveas==False:
@@ -198,9 +209,9 @@ class Eikonal_solver:
         else:
             return u.take(yz[0]) + jnp.cos(jnp.arccos(Delta) - jnp.arccos(alpha)) * jax_norm(ab[0], M=mm)
 
-    def initialize(self, bc=None):
+    def initialize(self):
         self.u = np.ones(self.resolution) * np.Inf
-        print(self.init_value)
+        print(self.source,self.init_value)
         self.u[self.source] = self.init_value
         for x in self.source:
             self.put_in_list(self.find_adjacent(x))
@@ -225,15 +236,13 @@ class Eikonal_solver:
                             q, tm = self.solve_eikonal(item, self.u, vm[item,:])
                             if p > q:
                                 self.u[item] = q
-                                if item in self.source:
-                                    self.init_value.pop(self.source.index(item))
-                                    self.source.remove(item)
+                                #if item in self.source:
+                                    #self.source.remove(item)
                                 self.put_in_list([item])
                                 self.tri_min[item] = tm
                     self.inlist[temp] = 0
                 else:
                     self.put_in_list([temp])
-                i = i + 1
             else:
                 neighbors = self.find_adjacent(temp)
                 for item in neighbors:
@@ -242,15 +251,14 @@ class Eikonal_solver:
                         q, tm = self.solve_eikonal(item, self.u, vm[item,:])
                         if p > q:
                             self.u[item] = q
-                            if item in self.source:
-                                self.init_value.pop(self.source.index(item))
-                                self.source.remove(item)
+                            #if item in self.source:
+                                #self.source.remove(item)
                             self.put_in_list([item])
                             self.tri_min[item] = tm
                 self.inlist[temp] = 0
         self.solve_order = np.argsort(self.u)
         self.tri_min.astype(int)
-    
+
     def jax_find_u(self, vm):
         self.initialize()
         self.u = jnp.array(self.u)
@@ -268,7 +276,7 @@ class Eikonal_solver:
 
     def fim_solver(self):
         self.find_u(self.vm)
-        
+
     def get_path(self, x, points=[], triangles=[]):
         if x in self.source:
             return None
@@ -293,13 +301,14 @@ class Eikonal_solver:
             points=list(set(points))
             triangles=np.unique(triangles, axis=0)
             return points, triangles
-    
+
     def find_derivatives(self, x):
         pts, trs = self.get_path(x) # Find domain of dependence
         subsolver = Eikonal_solver(self.mesh_points, trs, subsolver=x) # Create a solver on the domain of dependence
         subsolver.vm = self.vm
         subsolver.tri_min=self.tri_min
-        subsolver.set_condition(self.init_value, self.source)
+        subsolver.source = solver.source[:]
+        subsolver.init_value = solver.init_value[:]
         xy, x_ind, y_ind = np.intersect1d(self.solve_order, pts, return_indices=True)
         subsolver.solve_order = np.array(self.solve_order)[np.sort(x_ind)]
         dm = grad(subsolver.jax_find_u)(subsolver.vm) # Take the gradient by autodiff
@@ -345,6 +354,7 @@ class Eikonal_solver:
         plt.tight_layout()
         plt.show()
 
+
     def find_jacobian(self):
         j=[]
         for x in self.xobs:
@@ -359,9 +369,8 @@ class Eikonal_solver:
     def uni_direction_design(self, dir, boundary=np.arange(5, 35).tolist(), max_iter=10):
         ## Using Gauss-Newton Method to find the optimal velocity matrices
         count = 0
-        tau = find_plane_wave_bc(dir, self.mesh_points, init=False)
-        inits = find_plane_wave_bc(dir, self.mesh_points, boundary, init=True)
-        self.set_condition(inits, boundary)
+        tau = find_plane_wave_bc(dir, self.mesh_points)
+        self.set_condition(boundary, tau)
         while count < max_iter:
             print("iteration #: ", count)
             self.solve_order = []
@@ -378,18 +387,15 @@ class Eikonal_solver:
         ## Using Gauss-Newton Method to find the optimal velocity matrices
         count = 0
         tau = []
-        inits = []
         for dir in dirs:
-            tau.append(find_plane_wave_bc(dir, self.mesh_points, boundary, init=False))
-            inits.append(find_plane_wave_bc(dir, self.mesh_points, boundary, init=True))
+            tau.append(find_plane_wave_bc(dir, self.mesh_points, boundary))
         while count < max_iter:
             res = []
             J = []
             for i in range(len(dirs)):
-                self.set_condition(inits[i],boundary)
+                self.set_condition(boundary, tau[i])
                 print("iteration #: ", count)
                 self.solve_order = []
-                self.tri_min = np.ones([len(self.mesh_points),3]) * np.Inf
                 self.fim_solver()
                 res.append(np.array([tau[i] - self.u[self.xobs]]).T)
                 J.append(self.find_jacobian())
@@ -402,17 +408,20 @@ class Eikonal_solver:
             print(R)
             count = count + 1
 
-
+dirs = [[0, -1], [1,-1], [1,0], [1,1], [0,1], [-1,1], [-1, 0], [-1, -1]]
 solver = Eikonal_solver(np.array(mesh.points), np.array(mesh.elements))
-dirs = [[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1],[1,0],[1,1]]
 solver.multi_direction_design(dirs)
-solver.plot(saveas='multi_directions')
-solver.plot()
+#solver.find_u(solver.vm)
+#print(solver.source)
+#solver.plot(saveas='plane_wave')
+#print(solver.source)
+#solver.jax_find_u(solver.vm)
+#solver.plot()
 #points, triangles = solver.get_path(100)
 #print(len(points), len(solver.mesh_tris))
 t = time.time()
 #solver.find_velocity()
 #solver.plot_velocity()
-solver.find_derivatives(10)
+#solver.plot_derivative(20)
 print("Finding jacobian costs", time.time()-t)
 #plot()
